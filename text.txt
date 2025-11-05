@@ -1,0 +1,157 @@
+1️⃣ models/schemas.py → (Contratos de datos)
+🔹 Por qué primero:
+Los modelos Pydantic son la base del contrato entre el frontend y backend.
+Todo lo demás (endpoints y servicios) los usará para validar, enviar o recibir datos.
+🔹 Qué defines aquí:
+
+
+Clases que representen:
+
+
+AnalyzeSuggestion
+
+
+AnalyzeResponse
+
+
+ChartRequest
+
+
+ChartDataResponse
+
+
+
+
+Tipos literales (Literal["bar", "line", "pie", "scatter"])
+
+
+Campos como parameters, series, summary, etc.
+
+
+🔹 Objetivo:
+Tener las estructuras de entrada/salida claras y tipadas antes de escribir lógica.
+
+2️⃣ core/cache.py → (Almacenamiento temporal de datos)
+🔹 Por qué segundo:
+Los endpoints necesitan guardar el DataFrame que se genera cuando el usuario sube un archivo, pero eso depende de tener un mecanismo de cache o sesión.
+🔹 Qué defines aquí:
+
+
+Diccionario global o clase singleton (DATA_CACHE) para almacenar DataFrames en memoria.
+
+
+Funciones:
+
+
+save_df(df) → genera un file_id único.
+
+
+get_df(file_id) → recupera el DataFrame.
+
+
+delete_df(file_id) → limpia la sesión.
+
+
+
+
+🔹 Objetivo:
+Tener una forma de persistir temporalmente los datos entre llamadas /analyze y /chart-data.
+
+3️⃣ services/data_processor.py → (Lógica con pandas)
+🔹 Por qué tercero:
+Es la capa base de lógica real: leer, entender y procesar los datos.
+Sin esto, los endpoints no podrán analizar ni resumir el archivo.
+🔹 Qué funciones crearás:
+
+
+read_file_to_df(file_bytes, filename)
+→ Detecta si es CSV o Excel, y devuelve un DataFrame.
+
+
+extract_schema(df)
+→ Devuelve columnas, tipos, número de filas, y resumen descriptivo.
+
+
+summarize_for_chart(df, parameters)
+→ Hace las agregaciones (sum, count, mean, etc.) para los gráficos.
+
+
+🔹 Objetivo:
+Proveer toda la lógica de análisis de datos local sin IA.
+
+4️⃣ services/ai_analyzer.py → (Lógica de IA o heurística)
+🔹 Por qué cuarto:
+El endpoint /analyze usa esta capa para generar las sugerencias automáticas de gráficos.
+🔹 Qué definirás:
+
+
+get_suggestions(columns, dtypes, summary_text)
+→ Construye el prompt y obtiene 3–5 sugerencias (ya sea desde una IA real o función fake).
+
+
+analyze_series_narrative(series) (opcional, nivel 2)
+→ Interpreta los resultados de un gráfico y devuelve texto narrativo.
+
+
+🔹 Objetivo:
+Dar inteligencia a tu backend para proponer visualizaciones automáticamente.
+
+5️⃣ api/endpoints.py → (Capa de exposición HTTP)
+🔹 Por qué quinto:
+Ya tienes todas las piezas internas listas (models + core + services), así que ahora puedes conectarlas.
+🔹 Qué haces aquí:
+
+
+Implementas los endpoints /analyze, /chart-data, /schema, /session.
+
+
+Importas y usas funciones desde core y services.
+
+
+Devuelves objetos basados en models/schemas.
+
+
+🔹 Objetivo:
+Tener tu API lista para comunicarse con el frontend React.
+
+6️⃣ main.py → (Punto de entrada y configuración FastAPI)
+🔹 Por qué último:
+Es la “orquesta” que une todo.
+Solo tiene sentido una vez que tus endpoints existen.
+🔹 Qué incluye:
+
+
+Instancia FastAPI()
+
+
+Configuración de CORS
+
+
+Inclusión del router (app.include_router(api_router))
+
+
+Ruta / y /docs
+
+
+🔹 Objetivo:
+Lanzar el backend completo (uvicorn main:app --reload) y probarlo.
+
+🧩 Orden resumido (de arriba hacia abajo)
+PasoMóduloPropósito principal1️⃣models/schemas.pyDefine los modelos Pydantic (contratos de datos)2️⃣core/cache.pyMecanismo para almacenar DataFrames en memoria3️⃣services/data_processor.pyLectura y manipulación de datos con pandas4️⃣services/ai_analyzer.pyGenerar sugerencias de gráficos con IA o heurística5️⃣api/endpoints.pyExponer rutas que usan los servicios anteriores6️⃣main.pyPunto de entrada: configura FastAPI y monta las rutas
+
+💡 Recomendación adicional
+Mientras implementas:
+
+
+Prueba cada módulo por separado con pequeñas pruebas en consola (por ejemplo, probar read_file_to_df() antes de usarlo en el endpoint).
+
+
+Usa archivos .xlsx o .csv de ejemplo para validar que pandas lea correctamente.
+
+
+Una vez tengas /analyze y /chart-data funcionando, puedes conectar el frontend y probar el flujo completo.
+
+
+
+¿Quieres que te dé ahora una guía de qué funciones exactas (con su firma, propósito y valores de retorno) debería tener cada archivo (schemas, cache, data_processor, ai_analyzer)?
+Así podrías tener un blueprint técnico antes de escribir código.

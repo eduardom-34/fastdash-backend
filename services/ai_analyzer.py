@@ -1,157 +1,157 @@
 from __future__ import annotations
-from typing import Any, Dict, List, Optional
-import io
-import pandas as pd
-
-from models.schemas import ChartSeriesPoint
-
-# Esto lo que hará es: Leer el archivo, Extraccion de schema y agregación parametrizada 
-# para enerar series listas para graficar
+from typing import Any, Dict, Iterable, List
+import re
+from itertools import count
 
 
-def _safe_convert_dtypes(df: pd..DataFrame) -> pd.DataFrame:
-    # Convertir tipos al dtype mas apropiado
+def _is_date_col(name: str) -> bool:
     
-    try:
-        return df.convert_dtypes()
-    except Exception as e:
-        # Si hay un error, se devuelve el DataFrame original
-        return df
+    # Heurística simple por nombre de columna (en español e inglés)
+    n = name.strip().lower()
+    return n in {"fecha", "fechahora", "datetime", "timestamp", "mes", "date", "day", "month"} or \
+           bool(re.search(r"(fecha|date|_at)$", n))
+           
+           
+def _score_categorical(n_unique: int, total_rows: int) -> float:
     
-def _try_parse_datatimes(df: pd.DataFrame) -> pd.DataFrame:
-    # Intentar parsear columnas que parecen fechas
-    date_like = [c for c in df.columns if str(c).lower() in {"fecha", "date", "fechahora", "datetime", "timestamp", "mes"}]
-    for col in date_like:
-        if col in df.columns:
-            try:
-                df[col] = pd.to_datetime(df[col], errors="ignore", infer_datetime_format=True)
-            except Exception:
-                pass
-    return df
+    # Puntua qué tan 'graficable' es una columna categórica.
+    if total_rows <= 0:
+        return 0.0
+    if n_unique <= 1:
+        return 0.0
+    # ratio de categorías vs filas
+    ratio = n_unique / max(1, total_rows)
+    # campana centrada aprox en 10 categorías
+    target = 10
+    diff = abs(n_unique - target)
+    return 1.0 / (1.0 + diff) - ratio * 0.2
 
-def _read_excel(buffer: io.BytesIO) -> pd.DataFrame:
-    # Lee el excel o csv, requiere openpyxl instalado, por defecto toma la primera hoja
-    buffer.seek(0)
-    return pd.read_excel(buffer)
-
-# Esta es la api publica para procesar un archivo y generar series listas para graficar
-
-def read_file_df(file_byte: io.BytesIO, filename: str) -> pd.DataFrame:
-    # lee un archivo CSV o XLSX y devuelve un DataFrame
-    name = (filename or "").lower()
-    if name.endswith(".csv"):
-        df = _read_csv(file_byte)
-    elif name.endswith(".xlsx") or name.endswith(".xls"):
-        df = _read_csv(file_byte)
-    else:
-        try:
-            df = _read_csv(file_byte)
-        except expression:
-            df = _read_excel(file_byte)
-            
-            # normalizaciones basicas
-            df = _safe_convert_dtypes(df)
-            df = _try_parse_datatimes(df)
-            return df
-
-def extract_schema(df: pd.DataFrame) -> Dict[str, Any]:
-    # Devuelve un diccionario con metadatos del dataframe
-    columns = [str(c) for c in df.columns]
-    dtypes = {str(k): str(v) for k, v in df.dtypes.items()}
-    rows = int(len(df))
+def _pick_best_categorical(columns: Iterable[str], dtypes: Dict[str, Any], summary_text: str, sample_counts: Dict[str, int], total_rows: int) -> List[str]:
     
-    # vista previs pequeña para la UI
-    preview_rows = 15 if rows >= 15 else rows
-    preview = df.head(preview_rows).fillna("").astype(str).to_dict(orient="records")
+    # Ordena columnas candidatas categóricas por 'graficabilidad'
+    cands = []
+    for c in columns:
+        # Excluye columnas numéricas conocidas por nombre
+        if str(dtypes.get(c, "")).startswith(("int", "float", "Int", "Float")):
+            continue
+        n_unique = sample_counts.get(c, 0)
+        score = _score_categorical(n_unique, total_rows)
+        cands.append((score, c))
+    cands.sort(reverse=True)
+    return [c for _, c in cands]
+
+def _pick_numeric_priority(columns: Iterable[str], dtypes: Dict[str, Any]) -> List[str]:
     
-    # Clasificacion simple de columnas
-    numeric_cols = [c for c in df.columns if pd.api.types.is_object_dtype(df[c]) or pd.api.types.is_string_dtype(df[c])]
-    categorical_cols = [c for c in df.columns if pd.api.types.is_object_dtype(df[c]) or pd.api.types.is_numeric_dtype(df[c])]
-    
-    # Resuen estadistico
-    try:
-        summary_text = df.describe(include="all", datetime_is_numeric=True).fillna("").to_string()
-    except Exception:
-        summary_text = ""
-    
-    return {
-        "columns": columns,
-        "dtypes": dtypes,
-        "rows": rows,
-        "preview": preview,
-        "numeric_columns": numeric_cols,
-        "categorical_columns": categorical_cols,
-        "summary_text": summary_text,
-    }
-    
-sef summarize_for_chart(df: pd.DataFrame, parameters: Dict[str, any]) -> List[ChartSeriesPoint]:
-    # se usa pandas para producir datos listos para graficar
-    
-    x = parameters.get("x_axis")
-    y = parameters.get("y_axis")
-    agg = (parameters.get("agg") or "sum").lower()
-    filters = parameters.get("filters")
-    top_n = parameters.get("top_n")
-    sort_dir = (parameters.get("sort") or "desc").lower()
-    
-    work = df.copy()
-    
-    # Filtros simples
-    if isinstance(filters, dict):
-        for col, val in filters.items():
-            if col not in work.columns:
-                continue
-            if isinstance(val, list):
-                work = work[work[col].isin(val)]
-            else:
-                work = work[work[col] == val]
-    if x is None or x not in work.columns:
-        # Si no hay x válido, devolvemos un fallback con primeras filas indexadas
-        head = work.head(10)
-        return [ChartSeriesPoint(label=str(i), value=float(i)) for i in range(len(head))]
+    Prioriza columnas numéricas comunes para KPIs (VentaTotal, Ventas, Importe, Monto, etc.),
+    names = list(columns)
+    numeric = [c for c in names if str(dtypes.get(c, "")).lower().startswith(("int", "float"))]
+    # Heurísticas por nombre
+    priority_keywords = ["ventatotal", "ventas", "importe", "monto", "total", "cantidadvendida", "cantidad", "precio", "precioUnitario".lower()]
+    def key_fn(c: str) -> int:
+        cn = c.lower()
+        for i, k in enumerate(priority_keywords):
+            if k in cn:
+                return i  # menor es mejor
+        return 100 + numeric.index(c) if c in numeric else 999
+    numeric.sort(key=key_fn)
+    return numeric
 
-    # --- Caso: X e Y presentes → agregación sobre Y agrupada por X
-    if y and y in work.columns and pd.api.types.is_numeric_dtype(work[y]):
-        # Elegir función de agregación
-        if agg == "mean":
-            grouped = work.groupby(x, dropna=False)[y].mean().reset_index()
-        elif agg == "count":
-            # cuenta el número de registros por categoría de X (independiente de Y)
-            grouped = work.groupby(x, dropna=False)[y].count().reset_index()
-        else:
-            # sum por defecto
-            grouped = work.groupby(x, dropna=False)[y].sum().reset_index()
+def _first_date(columns: Iterable[str]) -> str | None:
+    for c in columns:
+        if _is_date_col(c):
+            return c
+    return None
 
-        # Ordenar por valor (si procede)
-        value_col = y if agg in {"sum", "mean"} else y  # para count también cae en y
-        if sort_dir in {"asc", "desc"}:
-            grouped = grouped.sort_values(by=value_col, ascending=(sort_dir == "asc"))
+def get_suggestions(columns: Iterable[str], dtypes: Dict[str, Any], summary_text: str = "") -> List[Dict[str, Any]]:
+    """
+    Devuelve una lista de sugerencias de gráficos (3–5) basadas en heurísticas.
+    - columns: nombres de columnas del DataFrame
+    - dtypes:  dict {col: dtype_str}
+    - summary_text: opcional, por si deseas ajustar reglas en el futuro
+    """
+    cols = list(columns)
+    if not cols:
+        return []
 
-        # Limitar top_n (si se pide)
-        if isinstance(top_n, int) and top_n > 0:
-            grouped = grouped.head(top_n)
+    # Estimación MUY ligera de cardinalidad por nombre (si tuvieras valores reales, pásalos aquí).
+    # Por now, asumimos cardinalidad intermedia si no sabemos (10).
+    sample_counts = {c: 10 for c in cols}
 
-        # Mapear a series
-        return [
-            ChartSeriesPoint(label=str(row[x]), value=float(row[value_col]))
-            for _, row in grouped.iterrows()
-        ]
+    # Candidatas
+    date_col = _first_date(cols)
+    numeric_cols = _pick_numeric_priority(cols, dtypes)  # ordenadas por prioridad de negocio
+    categorical_ranked = _pick_best_categorical(cols, dtypes, summary_text, sample_counts, total_rows=1000)
 
-    # --- Solo X presente (sin Y o Y no numérico) → conteo por categoría
-    counts = work[x].value_counts(dropna=False).reset_index()
-    counts.columns = [x, "count"]
+    suggestions: List[Dict[str, Any]] = []
+    sid = count(1)  # s1, s2, s3...
 
-    if sort_dir in {"asc", "desc"}:
-        counts = counts.sort_values(by="count", ascending=(sort_dir == "asc"))
+    # 1) Tendencia temporal si hay fecha + numérico
+    if date_col and numeric_cols:
+        y = numeric_cols[0]
+        suggestions.append({
+            "id": f"s{next(sid)}",
+            "title": f"Tendencia de {y} por {date_col}",
+            "chart_type": "line",
+            "parameters": {"x_axis": date_col, "y_axis": y, "agg": "sum", "sort": "asc"},
+            "insight": f"Evolución de {y} a lo largo del tiempo."
+        })
 
-    if isinstance(top_n, int) and top_n > 0:
-        counts = counts.head(top_n)
+    # 2) Barras por mejor categórica (x) vs numérico prioritario (y)
+    if categorical_ranked and numeric_cols:
+        x = categorical_ranked[0]
+        y = numeric_cols[0]
+        suggestions.append({
+            "id": f"s{next(sid)}",
+            "title": f"{y} por {x}",
+            "chart_type": "bar",
+            "parameters": {"x_axis": x, "y_axis": y, "agg": "sum", "sort": "desc", "top_n": 12},
+            "insight": f"Comparación de {y} entre categorías de {x}."
+        })
 
-    return [
-        ChartSeriesPoint(label=str(row[x]), value=float(row["count"]))
-        for _, row in counts.iterrows()
-    ]
+    # 3) Pie de proporciones por la mejor categórica (conteo)
+    if categorical_ranked:
+        x = categorical_ranked[0]
+        suggestions.append({
+            "id": f"s{next(sid)}",
+            "title": f"Proporción por {x}",
+            "chart_type": "pie",
+            "parameters": {"x_axis": x, "agg": "count", "top_n": 10},
+            "insight": f"Distribución de registros por {x}."
+        })
 
+    # 4) Barras por segunda categórica si existe
+    if len(categorical_ranked) >= 2 and numeric_cols:
+        x2 = categorical_ranked[1]
+        y = numeric_cols[0]
+        suggestions.append({
+            "id": f"s{next(sid)}",
+            "title": f"{y} por {x2}",
+            "chart_type": "bar",
+            "parameters": {"x_axis": x2, "y_axis": y, "agg": "sum", "sort": "desc", "top_n": 12},
+            "insight": f"Comparativa de {y} según {x2}."
+        })
 
+    # 5) Dispersión si hay dos numéricas
+    if len(numeric_cols) >= 2:
+        y1, y2 = numeric_cols[0], numeric_cols[1]
+        suggestions.append({
+            "id": f"s{next(sid)}",
+            "title": f"Relación {y1} vs {y2}",
+            "chart_type": "scatter",
+            "parameters": {"x_axis": y1, "y_axis": y2},
+            "insight": f"Relación entre {y1} y {y2}; útil para ver correlaciones y outliers."
+        })
 
+    # Fallbacks si quedamos cortos
+    if not suggestions and cols:
+        x = cols[0]
+        suggestions.append({
+            "id": f"s{next(sid)}",
+            "title": f"Conteo por {x}",
+            "chart_type": "bar",
+            "parameters": {"x_axis": x, "agg": "count", "top_n": 10},
+            "insight": f"Vista general de frecuencias por {x}."
+        })
 
+    # Limitar a 5 máx.
+    return suggestions[:5]
