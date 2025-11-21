@@ -13,7 +13,7 @@ app = FastAPI(title="AI Dashboard Builder API")
 # Configuración CORS (Permitir frontend)
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "https://fastdash-frontend.vercel.app/"], # Ajusta el puerto de tu React
+    allow_origins=["http://localhost:5173", "https://fastdash-frontend.vercel.app"], # Ajusta el puerto de tu React
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

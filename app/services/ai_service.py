@@ -1,13 +1,26 @@
 import json
-from openai import OpenAI
+import os
+from openai import OpenAI, OpenAIError
 from app.models import AIAnalysisSuggestion
 
 class AIService:
     def __init__(self):
         # Asegúrate de tener OPENAI_API_KEY en tus variables de entorno
-        self.client = OpenAI()
+        if not os.getenv("OPENAI_API_KEY"):
+            print("WARNING: OPENAI_API_KEY not found. AI features will be disabled.")
+            self.client = None
+        else:
+            try:
+                self.client = OpenAI()
+            except OpenAIError as e:
+                print(f"Error initializing OpenAI client: {e}")
+                self.client = None
 
     def analyze_data(self, data_summary: str) -> list[AIAnalysisSuggestion]:
+        if not self.client:
+            print("OpenAI client is not initialized.")
+            return []
+
         system_prompt = """
         Eres un Analista de Datos Senior experto. Tu objetivo es analizar la estructura de un dataset
         y sugerir 3 visualizaciones perspicaces que ayuden a un usuario de negocio a entender sus datos.
