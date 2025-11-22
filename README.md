@@ -12,6 +12,6 @@ Backend construido con FastAPI y Python para el procesamiento de datos con Panda
 ## Ejecución
 
 ```bash
-uvicorn app.main:app --reload
+fastapi dev app/main.py
 ```
 
